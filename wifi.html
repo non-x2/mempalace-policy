@@ -94,8 +94,22 @@
   .toggle { display: flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text); cursor: pointer; user-select: none; }
   .toggle input { width: 16px; height: 16px; }
   .status { font-size: 13px; color: var(--muted); margin-left: auto; min-width: 120px; text-align: right; }
-  .main { flex: 1; display: flex; min-height: 0; }
+  .main { flex: 1; display: flex; min-height: 0; position: relative; }
   #map { flex: 1; min-height: 0; }
+  .search-here {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    z-index: 600; background: var(--primary); color: #fff; border: none;
+    border-radius: 20px; padding: 8px 16px; font-size: 13px; font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0,0,0,.25); cursor: pointer;
+  }
+  .search-here[hidden] { display: none; }
+  .wifi-pin { background: none; border: none; }
+  .recenter {
+    background: #fff; width: 34px; height: 34px; border-radius: 6px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.3); border: none; cursor: pointer;
+    font-size: 18px; line-height: 34px; text-align: center; padding: 0;
+  }
+  .recenter:hover { background: #f0f5fb; }
   .sidebar {
     width: 340px;
     background: var(--card);
@@ -204,6 +218,7 @@
 
 <div class="main">
   <div id="map"></div>
+  <button class="search-here" id="searchHere" hidden>🔄 このエリアを再検索</button>
   <aside class="sidebar">
     <div class="summary" id="summary">スポットがここに表示されます</div>
     <div id="list"></div>
@@ -236,6 +251,7 @@
   var favBtn = document.getElementById("favBtn");
   var geoForm = document.getElementById("geoForm");
   var placeInput = document.getElementById("placeInput");
+  var searchHereEl = document.getElementById("searchHere");
 
   var userMarker = null;
   var spotLayer = L.layerGroup().addTo(map);
@@ -243,6 +259,30 @@
   var lastUserPos = null;
   var allSpots = [];      // 直近検索の結果（フィルタ前）
   var view = "results";   // "results" | "favorites"
+  var programmatic = false; // 地図のプログラム移動中フラグ（ユーザー操作と区別）
+
+  // 地図をコード側で移動する間は moveend を無視させる
+  function moveMap(fn) {
+    programmatic = true;
+    fn();
+    setTimeout(function () { programmatic = false; }, 400);
+  }
+
+  // ---- 設定の保存／復元（localStorage） ----
+  var SET_KEY = "freewifi:settings";
+  function loadSettings() {
+    try { return JSON.parse(localStorage.getItem(SET_KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+  function saveSettings() {
+    try {
+      localStorage.setItem(SET_KEY, JSON.stringify({
+        radius: radiusEl.value,
+        freeOnly: freeOnlyEl.checked,
+        center: lastUserPos
+      }));
+    } catch (e) {}
+  }
 
   // ---- お気に入り（localStorage） ----
   var FAV_KEY = "freewifi:favs";
@@ -362,6 +402,22 @@
       : '<span class="badge">無料WiFi</span>';
   }
 
+  // 料金で色分けしたピン（緑=無料 / 橙=店舗利用者向け / 赤=有料）
+  var FEE_COLOR = { free: "#1e7e34", customers: "#c77800", paid: "#b3261e" };
+  function pinIcon(fee) {
+    var color = FEE_COLOR[fee] || FEE_COLOR.free;
+    var svg = '<svg width="26" height="38" viewBox="0 0 26 38" xmlns="http://www.w3.org/2000/svg">' +
+      '<path d="M13 0C5.8 0 0 5.8 0 13c0 9.2 13 25 13 25s13-15.8 13-25C26 5.8 20.2 0 13 0z" fill="' + color + '"/>' +
+      '<circle cx="13" cy="13" r="5.5" fill="#fff"/></svg>';
+    return L.divIcon({
+      className: "wifi-pin",
+      html: svg,
+      iconSize: [26, 38],
+      iconAnchor: [13, 38],
+      popupAnchor: [0, -34]
+    });
+  }
+
   // 経路案内リンク（マップアプリの徒歩ナビを起動）
   function dirUrl(lat, lon) {
     return "https://www.google.com/maps/dir/?api=1&destination=" + lat + "," + lon + "&travelmode=walking";
@@ -431,7 +487,7 @@
     spotLayer.clearLayers();
     markerById = {};
     spots.forEach(function (s) {
-      var marker = L.marker([s.lat, s.lon]).bindPopup(popupHtml(s));
+      var marker = L.marker([s.lat, s.lon], { icon: pinIcon(s.fee) }).bindPopup(popupHtml(s));
       marker.addTo(spotLayer);
       markerById[s.id] = marker;
     });
@@ -486,7 +542,7 @@
     summaryEl.innerHTML = "<strong>" + favs.length + "件</strong>のお気に入り" + (lastUserPos ? "（近い順）" : "");
     placeMarkers(favs);
     var b = L.latLngBounds(favs.map(function (s) { return [s.lat, s.lon]; }));
-    map.fitBounds(b.pad(0.2), { maxZoom: 16 });
+    moveMap(function () { map.fitBounds(b.pad(0.2), { maxZoom: 16 }); });
     favs.forEach(function (s) { listEl.appendChild(buildSpotItem(s)); });
   }
 
@@ -499,13 +555,15 @@
     lastUserPos = [lat, lon];
     view = "results";
     favBtn.classList.remove("on");
+    searchHereEl.hidden = true;
+    saveSettings();
     var radius = parseInt(radiusEl.value, 10);
 
     if (userMarker) map.removeLayer(userMarker);
     userMarker = L.circleMarker([lat, lon], {
       radius: 8, color: "#fff", weight: 2, fillColor: "#e63946", fillOpacity: 1
     }).addTo(map).bindPopup("現在地");
-    map.setView([lat, lon], radius <= 1000 ? 16 : 14);
+    moveMap(function () { map.setView([lat, lon], radius <= 1000 ? 16 : 14); });
 
     setStatus('<span class="spinner"></span> 周辺を検索中...');
     locateBtn.disabled = true;
@@ -572,39 +630,83 @@
       .catch(function () { setStatus("⚠️ 地名検索に失敗しました"); });
   });
 
-  locateBtn.addEventListener("click", function () {
+  // 現在地取得（isAuto: 起動時の自動取得。失敗してもうるさく出さない）
+  function locate(isAuto) {
     if (!navigator.geolocation) {
-      setStatus("⚠️ お使いのブラウザは位置情報に対応していません");
+      if (!isAuto) setStatus("⚠️ お使いのブラウザは位置情報に対応していません");
       return;
     }
-    setStatus('<span class="spinner"></span> 現在地を取得中...');
+    if (!isAuto) setStatus('<span class="spinner"></span> 現在地を取得中...');
     navigator.geolocation.getCurrentPosition(
       function (pos) { search(pos.coords.latitude, pos.coords.longitude); },
       function (err) {
+        if (isAuto && lastUserPos) return; // 既に前回地点の結果を表示済みなら黙る
         var msg = "現在地を取得できませんでした";
         if (err.code === 1) msg = "位置情報が許可されませんでした。地名検索か、地図タップで探せます。";
         setStatus("⚠️ " + msg);
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
     );
-  });
+  }
+
+  locateBtn.addEventListener("click", function () { locate(false); });
 
   // 地図クリックでも検索
   map.on("click", function (e) { search(e.latlng.lat, e.latlng.lng); });
 
+  // ユーザーが地図を動かしたら「このエリアを再検索」を表示
+  map.on("moveend", function () {
+    if (programmatic || view !== "results") return;
+    if (!lastUserPos) return;
+    searchHereEl.hidden = false;
+  });
+  searchHereEl.addEventListener("click", function () {
+    var c = map.getCenter();
+    search(c.lat, c.lng);
+  });
+
+  // 現在地に戻るコントロール
+  var RecenterControl = L.Control.extend({
+    options: { position: "bottomright" },
+    onAdd: function () {
+      var b = L.DomUtil.create("button", "recenter");
+      b.innerHTML = "📍";
+      b.title = "現在地へ";
+      L.DomEvent.disableClickPropagation(b);
+      L.DomEvent.on(b, "click", function () { locate(false); });
+      return b;
+    }
+  });
+  map.addControl(new RecenterControl());
+
   radiusEl.addEventListener("change", function () {
+    saveSettings();
     if (lastUserPos && view === "results") search(lastUserPos[0], lastUserPos[1]);
   });
 
   freeOnlyEl.addEventListener("change", function () {
+    saveSettings();
     if (view === "results") renderResults();
   });
 
   favBtn.addEventListener("click", function () {
     view = (view === "favorites") ? "results" : "favorites";
     favBtn.classList.toggle("on", view === "favorites");
+    if (view === "favorites") searchHereEl.hidden = true;
     refresh();
   });
+
+  // ---- 起動時の初期化：設定復元 → 前回地点を即表示 → 現在地で更新 ----
+  (function init() {
+    var st = loadSettings();
+    if (st.radius) radiusEl.value = st.radius;
+    if (st.freeOnly) freeOnlyEl.checked = true;
+    if (st.center && st.center.length === 2) {
+      setStatus('<span class="spinner"></span> 前回の地点を表示中...');
+      search(st.center[0], st.center[1]);
+    }
+    locate(true); // 現在地が取れれば最新で再検索
+  })();
 
   // ---- PWA: Service Worker 登録 ----
   if ("serviceWorker" in navigator) {

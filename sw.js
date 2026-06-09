@@ -1,7 +1,7 @@
 /* FreeWiFi Finder - Service Worker
  * アプリのシェル（HTML/地図ライブラリ）をキャッシュしてオフライン起動と高速化を実現。
  * 検索系API（Overpass / Nominatim / 地図タイル）は常にネットワークを使う。 */
-var CACHE = "freewifi-v1";
+var CACHE = "freewifi-v2";
 var LOCAL_ASSETS = ["wifi.html", "manifest.webmanifest", "icon.svg"];
 var CDN_ASSETS = [
   "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css",
