@@ -1,0 +1,20 @@
+{
+  "name": "FreeWiFi Finder",
+  "short_name": "FreeWiFi",
+  "description": "現在地周辺の無料WiFiスポットを地図と一覧で探すアプリ",
+  "lang": "ja",
+  "start_url": "wifi.html",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f4f6f9",
+  "theme_color": "#0066cc",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
