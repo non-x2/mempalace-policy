@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeWiFi Finder - 無料WiFiスポットを探す</title>
+<meta name="description" content="現在地周辺の無料WiFiスポットを地図と一覧で探せるアプリ。OpenStreetMapのオープンデータを利用。">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root {
+    --primary: #0066cc;
+    --primary-dark: #004a99;
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --text: #1f2933;
+    --muted: #647280;
+    --border: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+  header {
+    background: var(--primary);
+    color: #fff;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    box-shadow: 0 2px 6px rgba(0,0,0,.15);
+    z-index: 1100;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  header .logo { font-size: 22px; }
+  header .sub { font-size: 12px; opacity: .85; margin-left: auto; }
+  .controls {
+    background: var(--card);
+    padding: 10px 16px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  button.action {
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 9px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  button.action:hover { background: var(--primary-dark); }
+  button.action:disabled { background: #9bb6d4; cursor: default; }
+  .radius-select { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  select {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 8px;
+    font-size: 13px;
+    background: #fff;
+  }
+  .status { font-size: 13px; color: var(--muted); margin-left: auto; }
+  .main { flex: 1; display: flex; min-height: 0; }
+  #map { flex: 1; min-height: 0; }
+  .sidebar {
+    width: 340px;
+    background: var(--card);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .sidebar .summary {
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--card);
+    z-index: 5;
+  }
+  .spot {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .spot:hover { background: #f0f5fb; }
+  .spot.active { background: #e3eefb; }
+  .spot .name { font-weight: 600; font-size: 15px; margin-bottom: 3px; }
+  .spot .meta { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+  .spot .dist {
+    color: var(--primary);
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .badge {
+    display: inline-block;
+    background: #e6f4ea;
+    color: #1e7e34;
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    margin-top: 4px;
+  }
+  .badge.fee { background: #fff3cd; color: #856404; }
+  .empty { padding: 30px 16px; text-align: center; color: var(--muted); font-size: 14px; }
+  .spinner {
+    width: 18px; height: 18px;
+    border: 2px solid #cbd5e1;
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    display: inline-block;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  footer {
+    flex-shrink: 0;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    padding: 6px 16px;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+  }
+  footer a { color: var(--primary); }
+  @media (max-width: 720px) {
+    .main { flex-direction: column; }
+    .sidebar { width: 100%; border-left: none; border-top: 1px solid var(--border); max-height: 45%; }
+    header .sub { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">📶</span>
+  <h1>FreeWiFi Finder</h1>
+  <span class="sub">無料WiFiスポットを探す</span>
+</header>
+
+<div class="controls">
+  <button class="action" id="locateBtn">📍 現在地から探す</button>
+  <div class="radius-select">
+    <label for="radius">検索範囲</label>
+    <select id="radius">
+      <option value="500">500m</option>
+      <option value="1000" selected>1km</option>
+      <option value="2000">2km</option>
+      <option value="5000">5km</option>
+    </select>
+  </div>
+  <span class="status" id="status">「現在地から探す」を押してください</span>
+</div>
+
+<div class="main">
+  <div id="map"></div>
+  <aside class="sidebar">
+    <div class="summary" id="summary">スポットがここに表示されます</div>
+    <div id="list"></div>
+  </aside>
+</div>
+
+<footer>
+  データ提供: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>
+  ／ 検索: Overpass API ｜ <a href="terms.html">利用規約</a> ｜ <a href="privacy.html">プライバシーポリシー</a>
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function () {
+  "use strict";
+
+  var map = L.map("map", { zoomControl: true }).setView([35.681236, 139.767125], 13); // 初期: 東京駅
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap contributors"
+  }).addTo(map);
+
+  var statusEl = document.getElementById("status");
+  var summaryEl = document.getElementById("summary");
+  var listEl = document.getElementById("list");
+  var locateBtn = document.getElementById("locateBtn");
+  var radiusEl = document.getElementById("radius");
+
+  var userMarker = null;
+  var spotLayer = L.layerGroup().addTo(map);
+  var markerById = {};
+  var lastUserPos = null;
+
+  function setStatus(html) { statusEl.innerHTML = html; }
+
+  function haversine(lat1, lon1, lat2, lon2) {
+    var R = 6371000;
+    var dLat = (lat2 - lat1) * Math.PI / 180;
+    var dLon = (lon2 - lon1) * Math.PI / 180;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function fmtDist(m) {
+    if (m < 1000) return Math.round(m) + " m";
+    return (m / 1000).toFixed(2) + " km";
+  }
+
+  function nameOf(tags) {
+    if (!tags) return "名称不明のスポット";
+    return tags["name:ja"] || tags.name || tags.operator || tags.brand ||
+      categoryLabel(tags) || "名称不明のスポット";
+  }
+
+  function categoryLabel(tags) {
+    var map = {
+      cafe: "カフェ", restaurant: "レストラン", fast_food: "ファストフード",
+      library: "図書館", fuel: "ガソリンスタンド", bar: "バー", pub: "パブ",
+      bank: "銀行", hospital: "病院", townhall: "役所", community_centre: "公民館"
+    };
+    if (tags.amenity && map[tags.amenity]) return map[tags.amenity];
+    if (tags.shop) return "店舗";
+    if (tags.tourism) return "観光案内";
+    if (tags.public_transport || tags.railway) return "駅・交通";
+    return null;
+  }
+
+  // Overpass query: free public wifi nodes/ways near a point.
+  // 網羅性重視: wlan/yes/terminal を対象にし、有料(yes|customers)のみ除外。
+  // internet_access:fee=no/free や未設定の無料相当も拾う。
+  function buildQuery(lat, lon, radius) {
+    var a = "(around:" + radius + "," + lat + "," + lon + ")";
+    var access = '["internet_access"~"^(wlan|yes|terminal)$"]';
+    var notPaid = '["internet_access:fee"!~"^(yes|customers)$"]';
+    return "[out:json][timeout:30];(" +
+      "node" + access + notPaid + a + ";" +
+      "way"  + access + notPaid + a + ";" +
+      ");out center 300;";
+  }
+
+  var OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+  ];
+
+  function fetchOverpass(query) {
+    var attempt = 0;
+    function tryNext() {
+      if (attempt >= OVERPASS_ENDPOINTS.length) {
+        return Promise.reject(new Error("すべてのデータサーバーへの接続に失敗しました"));
+      }
+      var url = OVERPASS_ENDPOINTS[attempt++];
+      return fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "data=" + encodeURIComponent(query)
+      }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).catch(function () {
+        return tryNext();
+      });
+    }
+    return tryNext();
+  }
+
+  function render(spots, userLat, userLon) {
+    spotLayer.clearLayers();
+    markerById = {};
+    listEl.innerHTML = "";
+
+    if (!spots.length) {
+      summaryEl.textContent = "この範囲に無料WiFiスポットは見つかりませんでした。範囲を広げてみてください。";
+      listEl.innerHTML = '<div class="empty">😕 該当なし<br>検索範囲を広げるか、別の場所で試してください。</div>';
+      return;
+    }
+
+    summaryEl.innerHTML = "<strong>" + spots.length + "件</strong>の無料WiFiスポットが見つかりました（近い順）";
+
+    spots.forEach(function (s, i) {
+      var marker = L.marker([s.lat, s.lon]);
+      marker.bindPopup(
+        '<strong>' + escapeHtml(s.name) + "</strong><br>" +
+        (s.cat ? escapeHtml(s.cat) + "<br>" : "") +
+        "距離: " + fmtDist(s.dist) + "<br>" +
+        '<a href="https://www.openstreetmap.org/?mlat=' + s.lat + "&mlon=" + s.lon +
+        '#map=19/' + s.lat + "/" + s.lon + '" target="_blank" rel="noopener">地図で開く</a>'
+      );
+      marker.addTo(spotLayer);
+      markerById[s.id] = marker;
+
+      var div = document.createElement("div");
+      div.className = "spot";
+      div.dataset.id = s.id;
+      div.innerHTML =
+        '<div class="name">' + escapeHtml(s.name) + "</div>" +
+        '<div class="meta">' +
+          '<span class="dist">📍 ' + fmtDist(s.dist) + "</span>" +
+          (s.cat ? "<span>" + escapeHtml(s.cat) + "</span>" : "") +
+        "</div>" +
+        '<span class="badge">無料WiFi</span>' +
+        (s.ssid ? '<span class="badge">SSID: ' + escapeHtml(s.ssid) + "</span>" : "");
+      div.addEventListener("click", function () {
+        map.setView([s.lat, s.lon], 17);
+        markerById[s.id].openPopup();
+        document.querySelectorAll(".spot.active").forEach(function (e) { e.classList.remove("active"); });
+        div.classList.add("active");
+      });
+      listEl.appendChild(div);
+    });
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function search(lat, lon) {
+    lastUserPos = [lat, lon];
+    var radius = parseInt(radiusEl.value, 10);
+
+    if (userMarker) map.removeLayer(userMarker);
+    userMarker = L.circleMarker([lat, lon], {
+      radius: 8, color: "#fff", weight: 2, fillColor: "#e63946", fillOpacity: 1
+    }).addTo(map).bindPopup("現在地");
+    map.setView([lat, lon], radius <= 1000 ? 16 : 14);
+
+    setStatus('<span class="spinner"></span> 周辺を検索中...');
+    locateBtn.disabled = true;
+
+    fetchOverpass(buildQuery(lat, lon, radius))
+      .then(function (data) {
+        var spots = (data.elements || []).map(function (el) {
+          var elat = el.lat != null ? el.lat : (el.center && el.center.lat);
+          var elon = el.lon != null ? el.lon : (el.center && el.center.lon);
+          if (elat == null || elon == null) return null;
+          var tags = el.tags || {};
+          return {
+            id: el.type + "/" + el.id,
+            lat: elat,
+            lon: elon,
+            name: nameOf(tags),
+            cat: categoryLabel(tags),
+            ssid: tags["internet_access:ssid"] || tags.wifi_ssid || null,
+            dist: haversine(lat, lon, elat, elon)
+          };
+        }).filter(Boolean);
+
+        spots.sort(function (a, b) { return a.dist - b.dist; });
+        render(spots, lat, lon);
+        setStatus(spots.length + " 件見つかりました");
+      })
+      .catch(function (err) {
+        setStatus("⚠️ " + err.message);
+        summaryEl.textContent = "検索に失敗しました。しばらくして再度お試しください。";
+      })
+      .finally(function () {
+        locateBtn.disabled = false;
+      });
+  }
+
+  locateBtn.addEventListener("click", function () {
+    if (!navigator.geolocation) {
+      setStatus("⚠️ お使いのブラウザは位置情報に対応していません");
+      return;
+    }
+    setStatus('<span class="spinner"></span> 現在地を取得中...');
+    navigator.geolocation.getCurrentPosition(
+      function (pos) { search(pos.coords.latitude, pos.coords.longitude); },
+      function (err) {
+        var msg = "現在地を取得できませんでした";
+        if (err.code === 1) msg = "位置情報の利用が許可されませんでした。地図をクリックして手動で検索できます。";
+        setStatus("⚠️ " + msg);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    );
+  });
+
+  // 地図クリックでも検索（位置情報が使えない場合のフォールバック）
+  map.on("click", function (e) {
+    search(e.latlng.lat, e.latlng.lng);
+  });
+
+  radiusEl.addEventListener("change", function () {
+    if (lastUserPos) search(lastUserPos[0], lastUserPos[1]);
+  });
+})();
+</script>
+</body>
+</html>
