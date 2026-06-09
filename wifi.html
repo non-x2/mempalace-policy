@@ -118,6 +118,7 @@
     margin-top: 4px;
   }
   .badge.fee { background: #fff3cd; color: #856404; }
+  .badge.paid { background: #fde2e2; color: #a12626; }
   .empty { padding: 30px 16px; text-align: center; color: var(--muted); font-size: 14px; }
   .spinner {
     width: 18px; height: 18px;
@@ -239,17 +240,24 @@
     return null;
   }
 
-  // Overpass query: free public wifi nodes/ways near a point.
-  // 網羅性重視: wlan/yes/terminal を対象にし、有料(yes|customers)のみ除外。
-  // internet_access:fee=no/free や未設定の無料相当も拾う。
+  // Overpass query: WiFi のある地点を網羅的に取得。
+  // 「徹底的に見つけたい」要望に合わせ、internet_access が no/false/none 以外の
+  // ものを全て拾う（無料・店舗利用者向け・有料は JS 側でバッジ分類）。
   function buildQuery(lat, lon, radius) {
     var a = "(around:" + radius + "," + lat + "," + lon + ")";
-    var access = '["internet_access"~"^(wlan|yes|terminal)$"]';
-    var notPaid = '["internet_access:fee"!~"^(yes|customers)$"]';
+    var access = '["internet_access"]["internet_access"!~"^(no|false|none)$"]';
     return "[out:json][timeout:30];(" +
-      "node" + access + notPaid + a + ";" +
-      "way"  + access + notPaid + a + ";" +
-      ");out center 300;";
+      "node" + access + a + ";" +
+      "way"  + access + a + ";" +
+      ");out center 400;";
+  }
+
+  // 料金タグから 無料 / 店舗利用者向け / 有料 を判定
+  function classifyFee(tags) {
+    var fee = (tags["internet_access:fee"] || tags.fee || "").toLowerCase();
+    if (fee === "customers") return "customers";
+    if (fee === "yes" || fee === "some") return "paid";
+    return "free"; // no / free / 0 / 未設定
   }
 
   var OVERPASS_ENDPOINTS = [
@@ -285,12 +293,17 @@
     listEl.innerHTML = "";
 
     if (!spots.length) {
-      summaryEl.textContent = "この範囲に無料WiFiスポットは見つかりませんでした。範囲を広げてみてください。";
-      listEl.innerHTML = '<div class="empty">😕 該当なし<br>検索範囲を広げるか、別の場所で試してください。</div>';
+      summaryEl.textContent = "この範囲にWiFi情報が見つかりませんでした。";
+      listEl.innerHTML = '<div class="empty">😕 該当なし<br><br>' +
+        '・検索範囲を <strong>5km</strong> に広げてみてください<br>' +
+        '・または地図の市街地を<strong>タップ</strong>すると、その地点で再検索します<br><br>' +
+        '<span style="font-size:12px">※ OpenStreetMap に登録されたWiFi情報を表示しています。地方や住宅街は登録が少ない場合があります。</span></div>';
       return;
     }
 
-    summaryEl.innerHTML = "<strong>" + spots.length + "件</strong>の無料WiFiスポットが見つかりました（近い順）";
+    var freeCount = spots.filter(function (s) { return s.fee === "free"; }).length;
+    summaryEl.innerHTML = "<strong>" + spots.length + "件</strong>のWiFiスポット" +
+      (freeCount ? "（うち無料 " + freeCount + "件）" : "") + " ／ 無料・近い順";
 
     spots.forEach(function (s, i) {
       var marker = L.marker([s.lat, s.lon]);
@@ -304,6 +317,12 @@
       marker.addTo(spotLayer);
       markerById[s.id] = marker;
 
+      var feeBadge = s.fee === "customers"
+        ? '<span class="badge fee">店舗利用者向け</span>'
+        : s.fee === "paid"
+          ? '<span class="badge paid">有料</span>'
+          : '<span class="badge">無料WiFi</span>';
+
       var div = document.createElement("div");
       div.className = "spot";
       div.dataset.id = s.id;
@@ -313,7 +332,7 @@
           '<span class="dist">📍 ' + fmtDist(s.dist) + "</span>" +
           (s.cat ? "<span>" + escapeHtml(s.cat) + "</span>" : "") +
         "</div>" +
-        '<span class="badge">無料WiFi</span>' +
+        feeBadge +
         (s.ssid ? '<span class="badge">SSID: ' + escapeHtml(s.ssid) + "</span>" : "");
       div.addEventListener("click", function () {
         map.setView([s.lat, s.lon], 17);
@@ -357,12 +376,18 @@
             lon: elon,
             name: nameOf(tags),
             cat: categoryLabel(tags),
+            fee: classifyFee(tags),
             ssid: tags["internet_access:ssid"] || tags.wifi_ssid || null,
             dist: haversine(lat, lon, elat, elon)
           };
         }).filter(Boolean);
 
-        spots.sort(function (a, b) { return a.dist - b.dist; });
+        // 無料を優先しつつ、同区分内では近い順
+        var feeRank = { free: 0, customers: 1, paid: 2 };
+        spots.sort(function (a, b) {
+          if (feeRank[a.fee] !== feeRank[b.fee]) return feeRank[a.fee] - feeRank[b.fee];
+          return a.dist - b.dist;
+        });
         render(spots, lat, lon);
         setStatus(spots.length + " 件見つかりました");
       })
